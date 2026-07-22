@@ -3,6 +3,7 @@ import { MatrixClient, EventType } from "matrix-js-sdk";
 import type { OlmMachine } from "@matrix-org/matrix-sdk-crypto-nodejs";
 import fetch from "node-fetch";
 import { decryptMatrixEvent } from "./crypto/messageCrypto.js";
+import { decryptViaBackupRestore } from "./crypto/backupRestore.js";
 
 /**
  * Represents a processed message that can be returned to MCP clients
@@ -72,7 +73,13 @@ export async function processMessage(
       };
     }
     const roomId = event.getRoomId();
-    const result = await decryptMatrixEvent(olmMachine, event, roomId ?? "");
+    let result = await decryptMatrixEvent(olmMachine, event, roomId ?? "");
+    if (!result.ok) {
+      // Fall back to restoring the specific session from server-side key
+      // backup - covers history from before this device existed, which the
+      // live OlmMachine can never have received via normal key sharing.
+      result = await decryptViaBackupRestore(matrixClient, event, roomId ?? "");
+    }
     if (!result.ok) {
       return {
         type: "text",

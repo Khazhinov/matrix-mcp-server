@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@matrix-org/matrix-sdk-crypto-nodejs": "^0.6.1",
+    "@matrix-org/matrix-sdk-crypto-wasm": "^15.3.0",
     "@modelcontextprotocol/sdk": "^1.16.0",
     "cors": "^2.8.5",
     "dotenv": "^17.2.0",
