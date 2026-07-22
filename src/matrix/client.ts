@@ -3,7 +3,9 @@ import { MatrixClient, ClientEvent } from "matrix-js-sdk";
 import https from "https";
 import fetch from "node-fetch";
 import { exchangeToken, TokenExchangeConfig } from "../auth/tokenExchange.js";
-import { getCachedClient, cacheClient, removeCachedClient } from "./clientCache.js";
+import { getCachedClient, cacheClient, removeCachedClient, getCacheKey } from "./clientCache.js";
+import { getOrCreateCryptoSidecar } from "./crypto/olmMachineManager.js";
+import type { CryptoSidecar } from "./crypto/types.js";
 
 /**
  * Configuration for Matrix client creation
@@ -100,9 +102,30 @@ export async function createMatrixClient(
       });
     });
 
+    // Bootstrap E2EE support. Failure here must not prevent the client from
+    // being cached/usable - only encrypted-room sends will fail (with a
+    // clear error) until this succeeds on a later client recreation.
+    let cryptoSidecar: CryptoSidecar | undefined;
+    if (process.env.MATRIX_E2EE_ENABLED !== "false") {
+      try {
+        const whoami = await client.whoami();
+        const deviceId = whoami.device_id;
+        if (!deviceId) {
+          throw new Error("Homeserver did not return a device_id from whoami().");
+        }
+        const cacheKey = getCacheKey(userId, homeserverUrl);
+        cryptoSidecar = await getOrCreateCryptoSidecar(client, userId, deviceId, homeserverUrl, cacheKey);
+      } catch (cryptoError) {
+        console.error(
+          `E2EE: crypto sidecar init failed for ${userId}: ${cryptoError}. ` +
+            "Continuing without E2EE - encrypted-room sends will fail with a clear error until this is fixed."
+        );
+      }
+    }
+
     // Cache the successfully created and synced client
-    cacheClient(client, userId, homeserverUrl);
-    
+    cacheClient(client, userId, homeserverUrl, cryptoSidecar);
+
     return client;
   } catch (error) {
     // If client creation failed, make sure to stop the client and don't cache it

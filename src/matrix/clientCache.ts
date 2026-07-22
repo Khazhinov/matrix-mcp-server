@@ -1,4 +1,6 @@
 import { MatrixClient } from "matrix-js-sdk";
+import { disposeCryptoSidecar } from "./crypto/olmMachineManager.js";
+import type { CryptoSidecar } from "./crypto/types.js";
 
 /**
  * Cached Matrix client entry
@@ -8,6 +10,18 @@ interface CachedMatrixClient {
   lastAccessed: number;
   userId: string;
   homeserverUrl: string;
+  crypto?: CryptoSidecar;
+}
+
+/** Dispose a cache entry's crypto sidecar, if any, before the client itself is stopped. */
+function disposeEntryCrypto(cached: CachedMatrixClient): void {
+  if (cached.crypto) {
+    try {
+      disposeCryptoSidecar(cached.crypto);
+    } catch (error) {
+      console.warn(`Error disposing crypto sidecar: ${error}`);
+    }
+  }
 }
 
 /**
@@ -29,7 +43,7 @@ const CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
 /**
  * Generate cache key for a client
  */
-function getCacheKey(userId: string, homeserverUrl: string): string {
+export function getCacheKey(userId: string, homeserverUrl: string): string {
   return `${userId}:${homeserverUrl}`;
 }
 
@@ -41,6 +55,7 @@ function cleanupExpiredClients(): void {
   for (const [key, cached] of clientCache.entries()) {
     if (now - cached.lastAccessed > CACHE_TTL_MS) {
       console.log(`Cleaning up expired Matrix client for ${cached.userId}`);
+      disposeEntryCrypto(cached);
       try {
         cached.client.stopClient();
       } catch (error) {
@@ -87,6 +102,7 @@ export function getCachedClient(userId: string, homeserverUrl: string): MatrixCl
   // Check if expired
   if (Date.now() - cached.lastAccessed > CACHE_TTL_MS) {
     console.log(`Cached client expired for ${userId}`);
+    disposeEntryCrypto(cached);
     try {
       cached.client.stopClient();
     } catch (error) {
@@ -105,29 +121,42 @@ export function getCachedClient(userId: string, homeserverUrl: string): MatrixCl
 /**
  * Cache a Matrix client
  */
-export function cacheClient(client: MatrixClient, userId: string, homeserverUrl: string): void {
+export function cacheClient(
+  client: MatrixClient,
+  userId: string,
+  homeserverUrl: string,
+  crypto?: CryptoSidecar
+): void {
   startCleanupInterval(); // Ensure cleanup is running
-  
+
   const key = getCacheKey(userId, homeserverUrl);
-  
+
   // If there's already a cached client, stop it first
   const existing = clientCache.get(key);
   if (existing) {
+    disposeEntryCrypto(existing);
     try {
       existing.client.stopClient();
     } catch (error) {
       console.warn(`Error stopping existing cached client: ${error}`);
     }
   }
-  
+
   clientCache.set(key, {
     client,
     lastAccessed: Date.now(),
     userId,
-    homeserverUrl
+    homeserverUrl,
+    crypto
   });
-  
+
   console.log(`Cached Matrix client for ${userId}`);
+}
+
+/** Get the crypto sidecar for a cached client, if any, without refreshing its TTL. */
+export function getCachedCryptoSidecar(userId: string, homeserverUrl: string): CryptoSidecar | null {
+  const key = getCacheKey(userId, homeserverUrl);
+  return clientCache.get(key)?.crypto ?? null;
 }
 
 /**
@@ -138,6 +167,7 @@ export function removeCachedClient(userId: string, homeserverUrl: string): void 
   const cached = clientCache.get(key);
   
   if (cached) {
+    disposeEntryCrypto(cached);
     try {
       cached.client.stopClient();
     } catch (error) {
@@ -155,6 +185,7 @@ export function shutdownAllClients(): void {
   stopCleanupInterval();
   
   for (const cached of clientCache.values()) {
+    disposeEntryCrypto(cached);
     try {
       cached.client.stopClient();
     } catch (error) {
