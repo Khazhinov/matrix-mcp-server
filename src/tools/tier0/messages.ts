@@ -2,6 +2,7 @@ import { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { createConfiguredMatrixClient, getAccessToken, getMatrixContext } from "../../utils/server-helpers.js";
 import { removeClientFromCache } from "../../matrix/client.js";
+import { getCachedCryptoSidecar } from "../../matrix/clientCache.js";
 import { processMessage, processMessagesByDate, countMessagesByUser } from "../../matrix/messageProcessor.js";
 import { ToolRegistrationFunction } from "../../types/tool-types.js";
 
@@ -29,12 +30,13 @@ export const getRoomMessagesHandler = async (
       };
     }
 
+    const olmMachine = getCachedCryptoSidecar(matrixUserId, homeserverUrl)?.olmMachine ?? null;
     const messages = await Promise.all(
       room
         .getLiveTimeline()
         .getEvents()
         .slice(-limit)
-        .map((event) => processMessage(event, client))
+        .map((event) => processMessage(event, client, olmMachine))
     );
 
     const validMessages = messages.filter((message) => message !== null);
@@ -89,7 +91,8 @@ export const getMessagesByDateHandler = async (
     }
 
     const events = room.getLiveTimeline().getEvents();
-    const messages = await processMessagesByDate(events, startDate, endDate, client);
+    const olmMachine = getCachedCryptoSidecar(matrixUserId, homeserverUrl)?.olmMachine ?? null;
+    const messages = await processMessagesByDate(events, startDate, endDate, client, olmMachine);
 
     return {
       content:
