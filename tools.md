@@ -97,8 +97,8 @@
 
 #### 5. `create-room` - Create new rooms ✅ **COMPLETED**
 - [x] **SDK Methods**: `createRoom()`
-- [x] **Features**: Public/private rooms, set name/topic, invite users, room settings, aliases, security settings
-- [x] **Schema**: `roomName`, `isPrivate?`, `topic?`, `inviteUsers?`, `roomAlias?`
+- [x] **Features**: Public/private rooms, set name/topic, invite users, room settings, aliases, security settings, optional E2EE
+- [x] **Schema**: `roomName`, `isPrivate?`, `topic?`, `inviteUsers?`, `roomAlias?`, `encrypted?` (default `false` - adds `m.room.encryption` initial state)
 - [x] **Why Essential**: Room creation is a core Matrix feature
 
 #### 6. `invite-user` - Invite users to rooms ✅ **COMPLETED**
