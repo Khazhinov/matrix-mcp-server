@@ -264,7 +264,7 @@ This fork adds full E2EE support on top of upstream, using **two independent cry
 
    The response contains `access_token` and `device_id` - use `access_token` as `MATRIX_ACCESS_TOKEN`. **Run this command in your own terminal, never inside an AI coding assistant/agent session** - the password would end up in that session's transcript/logs.
 
-2. **Get your account's Secure Secret Storage (4S) recovery key** for `MATRIX_RECOVERY_KEY`. In Element: **Settings → Security & Privacy → Secure Backup**. If one is already set up, you can view/re-display the recovery key there; if not, set up Secure Backup first (Element will generate one for you). This key is used for two things:
+2. **Get your account's Secure Secret Storage (4S) recovery key** for `MATRIX_RECOVERY_KEY`. In Element: **Settings -> Security & Privacy -> Secure Backup**. If one is already set up, you can view/re-display the recovery key there; if not, set up Secure Backup first (Element will generate one for you). This key is used for two things:
    - **Cross-signing bootstrap**: makes the bot's device cryptographically signed by your account's identity (affects the "verified" indicator other clients show for it - not required for sending/receiving to work, but recommended).
    - **History restore**: without it, the server can still send and receive *new* messages in encrypted rooms, but cannot decrypt anything sent before it first joined a room's session (a normal Matrix limitation for any new device - see [Known Limitations](#known-limitations)).
 
@@ -278,6 +278,12 @@ This fork adds full E2EE support on top of upstream, using **two independent cry
 
 4. Restart the server. On first run it will upload device keys and (if `MATRIX_RECOVERY_KEY` is set) attempt cross-signing bootstrap - check the logs for `E2EE: cross-signing bootstrap succeeded` or a specific warning if something's missing.
 
+### History Pagination
+
+`get-room-messages` and `get-messages-by-date` only operate on whatever's already loaded into the room's local timeline (bounded by `initialSyncLimit` plus anything received live since) - by default that never reaches further back on its own, **regardless of encryption**, an unencrypted room's very old history is equally invisible until paginated. Both tools now call `client.scrollback()` as needed before reading the timeline (`src/matrix/historyPagination.ts`), capped at 20 pagination requests per call as a safety bound against pathologically large full-room walks. Combined with key-backup restore, this means a fresh `MATRIX_RECOVERY_KEY`-configured deployment can retrieve messages from the very start of a room's history, not just from whenever this server first joined it.
+
+Decrypted-session lookups performed during history restore are cached to a small SQLite database next to `MATRIX_CRYPTO_STORE_PATH` (`src/matrix/crypto/sessionCache.ts`, via Node's built-in `node:sqlite` - no extra native dependency) - one megolm session typically covers many messages, so this avoids repeating the full backup-restore network round trip for every single historical message that shares a session.
+
 ### Known Limitations
 
 - **The "Unverified" shield in Element may not clear even when everything is working correctly.** Cross-signing bootstrap can be cryptographically complete and confirmed (checked directly via `/keys/query`) while some Element sessions still show the device as unverified - this has been observed to be Element-client-side trust-state caching, not a signal that something is broken. It does not block sending or receiving.
@@ -285,6 +291,7 @@ This fork adds full E2EE support on top of upstream, using **two independent cry
 - **`get-room-messages` does not currently render `m.emote` message content** (pre-existing gap, inherited from before this fork's E2EE work - out of scope for the encryption effort specifically).
 - **MCP clients typically cache each tool's parameter schema for the lifetime of a session/connection.** If you upgrade this server and a tool gains a new parameter (e.g. `create-room`'s `encrypted`), reconnect your MCP client (restart the session) before using the new parameter - otherwise the client-side schema cache will reject it as an unrecognized/mistyped field even though the server supports it correctly.
 - **Building the Docker image requires outbound network access to GitHub**, not just the npm registry - `@matrix-org/matrix-sdk-crypto-nodejs`'s `postinstall` script fetches its prebuilt native binary directly from GitHub Releases rather than via npm's `optionalDependencies` mechanism. If your build environment restricts egress to the npm registry only, this step will fail.
+- **Pagination is capped at 20 `scrollback()` calls per request** (`historyPagination.ts`) - an extremely large gap between what's loaded and the requested date range (e.g. querying a multi-year-old date in a very high-traffic room for the first time) may need more than one tool call to fully reach.
 
 ## Authentication & Configuration
 
@@ -445,6 +452,7 @@ src/
 │   ├── client.ts          # Client creation/caching, E2EE sidecar bootstrap
 │   ├── clientCache.ts      # Per-account client + crypto sidecar cache
 │   ├── messageProcessor.ts # Message formatting, encrypted-event decrypt branch
+│   ├── historyPagination.ts # scrollback()-based pagination for older-than-loaded history
 │   └── crypto/             # E2EE implementation (see "End-to-End Encryption" above)
 │       ├── olmMachineManager.ts    # Persistent OlmMachine lifecycle
 │       ├── outgoingRequestDrain.ts # Dispatches OlmMachine's outgoing requests
@@ -452,7 +460,8 @@ src/
 │       ├── deviceTracking.ts       # Device tracking + megolm session sharing
 │       ├── messageCrypto.ts        # encrypt/decrypt entry points
 │       ├── recoveryBootstrap.ts    # Cross-signing bootstrap via 4S recovery key
-│       └── backupRestore.ts        # History restore via key backup (ephemeral WASM engine)
+│       ├── backupRestore.ts        # History restore via key backup (ephemeral WASM engine)
+│       └── sessionCache.ts         # Disk cache of already-restored session keys
 ├── utils/                 # Helper utilities
 └── types/                 # TypeScript type definitions
 ```
