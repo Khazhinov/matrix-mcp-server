@@ -12,6 +12,7 @@
     "test": "jest"
   },
   "dependencies": {
+    "@matrix-org/matrix-sdk-crypto-nodejs": "^0.6.1",
     "@modelcontextprotocol/sdk": "^1.16.0",
     "cors": "^2.8.5",
     "dotenv": "^17.2.0",
@@ -36,6 +37,6 @@
     "typescript": "^5.8.0"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=24.0.0"
   }
 }
