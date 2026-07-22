@@ -22,20 +22,29 @@ const RequestType = {
 export async function drainOutgoingRequests(client: MatrixClient, olmMachine: OlmMachine): Promise<void> {
   const requests = await olmMachine.outgoingRequests();
   for (const request of requests) {
-    try {
-      const response = await dispatchRequest(client, request);
-      await olmMachine.markRequestAsSent(request.id, request.type, JSON.stringify(response ?? {}));
-      // A KeysUpload response's one_time_key_counts must be fed straight
-      // back, or OlmMachine can believe the server-side count is still
-      // stale/low and re-generate an overlapping batch of one-time keys on
-      // the very next drain, which the homeserver then rejects as
-      // "already exists" (observed during Milestone 2 testing).
-      if (request.type === RequestType.KeysUpload && response?.one_time_key_counts) {
-        await olmMachine.receiveSyncChanges("[]", new DeviceLists(), response.one_time_key_counts, []);
-      }
-    } catch (error) {
-      console.warn(`E2EE: failed to dispatch outgoing request ${request.id} (type ${request.type}): ${error}`);
+    await dispatchAndMarkSent(client, olmMachine, request);
+  }
+}
+
+/**
+ * Dispatch a single request (from outgoingRequests() or returned directly by
+ * a method like importSecretsFromSecretStorage/getMissingSessions/shareRoomKey)
+ * and mark it as sent. Never throws - failures are logged, not propagated.
+ */
+export async function dispatchAndMarkSent(client: MatrixClient, olmMachine: OlmMachine, request: any): Promise<void> {
+  try {
+    const response = await dispatchRequest(client, request);
+    await olmMachine.markRequestAsSent(request.id, request.type, JSON.stringify(response ?? {}));
+    // A KeysUpload response's one_time_key_counts must be fed straight
+    // back, or OlmMachine can believe the server-side count is still
+    // stale/low and re-generate an overlapping batch of one-time keys on
+    // the very next drain, which the homeserver then rejects as
+    // "already exists" (observed during Milestone 2 testing).
+    if (request.type === RequestType.KeysUpload && response?.one_time_key_counts) {
+      await olmMachine.receiveSyncChanges("[]", new DeviceLists(), response.one_time_key_counts, []);
     }
+  } catch (error) {
+    console.warn(`E2EE: failed to dispatch outgoing request ${request.id} (type ${request.type}): ${error}`);
   }
 }
 
