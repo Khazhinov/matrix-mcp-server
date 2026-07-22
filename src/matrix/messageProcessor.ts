@@ -1,6 +1,6 @@
 import * as sdk from "matrix-js-sdk";
 import { MatrixClient, EventType } from "matrix-js-sdk";
-import type { OlmMachine } from "@matrix-org/matrix-sdk-crypto-nodejs";
+import type { CryptoSidecar } from "./crypto/types.js";
 import fetch from "node-fetch";
 import { decryptMatrixEvent } from "./crypto/messageCrypto.js";
 import { decryptViaBackupRestore } from "./crypto/backupRestore.js";
@@ -60,13 +60,13 @@ async function formatRoomMessageContent(
  *
  * @param event - Matrix event to process
  * @param matrixClient - Matrix client instance for fetching additional data
- * @param olmMachine - E2EE sidecar for this account, if available (null if not bootstrapped/disabled)
+ * @param cryptoSidecar - E2EE sidecar for this account, if available (null if not bootstrapped/disabled)
  * @returns Promise<ProcessedMessage | null> - Processed message or null if not processable
  */
 export async function processMessage(
   event: sdk.MatrixEvent,
   matrixClient: MatrixClient | null,
-  olmMachine: OlmMachine | null = null
+  cryptoSidecar: CryptoSidecar | null = null
 ): Promise<ProcessedMessage | null> {
   if (!matrixClient) {
     throw new Error("Matrix client is not initialized.");
@@ -74,7 +74,7 @@ export async function processMessage(
 
   if (event.getType() === "m.room.encrypted") {
     const senderPrefix = formatSenderPrefix(event.getSender(), event.getTs());
-    if (!olmMachine) {
+    if (!cryptoSidecar) {
       return {
         type: "text",
         text: `${senderPrefix}[Unable to decrypt message: no E2EE session available for this account]`,
@@ -82,12 +82,12 @@ export async function processMessage(
       };
     }
     const roomId = event.getRoomId();
-    let result = await decryptMatrixEvent(olmMachine, event, roomId ?? "");
+    let result = await decryptMatrixEvent(cryptoSidecar.olmMachine, event, roomId ?? "");
     if (!result.ok) {
       // Fall back to restoring the specific session from server-side key
       // backup - covers history from before this device existed, which the
       // live OlmMachine can never have received via normal key sharing.
-      result = await decryptViaBackupRestore(matrixClient, event, roomId ?? "");
+      result = await decryptViaBackupRestore(matrixClient, event, roomId ?? "", cryptoSidecar.storePath);
     }
     if (!result.ok) {
       return {
@@ -117,7 +117,7 @@ export async function processMessage(
  * @param startDate - Start date string
  * @param endDate - End date string
  * @param matrixClient - Matrix client instance
- * @param olmMachine - E2EE sidecar for this account, if available
+ * @param cryptoSidecar - E2EE sidecar for this account, if available
  * @returns Promise<ProcessedMessage[]> - Array of processed messages
  */
 export async function processMessagesByDate(
@@ -125,7 +125,7 @@ export async function processMessagesByDate(
   startDate: string,
   endDate: string,
   matrixClient: MatrixClient,
-  olmMachine: OlmMachine | null = null
+  cryptoSidecar: CryptoSidecar | null = null
 ): Promise<ProcessedMessage[]> {
   const start = new Date(startDate).getTime();
   const end = new Date(endDate).getTime();
@@ -136,7 +136,7 @@ export async function processMessagesByDate(
   });
 
   const messages = await Promise.all(
-    filteredEvents.map((event) => processMessage(event, matrixClient, olmMachine))
+    filteredEvents.map((event) => processMessage(event, matrixClient, cryptoSidecar))
   );
 
   return messages.filter((message) => message !== null) as ProcessedMessage[];

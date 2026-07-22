@@ -4,6 +4,7 @@ import { createConfiguredMatrixClient, getAccessToken, getMatrixContext } from "
 import { removeClientFromCache } from "../../matrix/client.js";
 import { getCachedCryptoSidecar } from "../../matrix/clientCache.js";
 import { processMessage, processMessagesByDate, countMessagesByUser } from "../../matrix/messageProcessor.js";
+import { ensureMinimumEventCount, ensureHistoryBefore } from "../../matrix/historyPagination.js";
 import { ToolRegistrationFunction } from "../../types/tool-types.js";
 
 // Tool: Get room messages
@@ -30,13 +31,15 @@ export const getRoomMessagesHandler = async (
       };
     }
 
-    const olmMachine = getCachedCryptoSidecar(matrixUserId, homeserverUrl)?.olmMachine ?? null;
+    await ensureMinimumEventCount(client, room, limit);
+
+    const cryptoSidecar = getCachedCryptoSidecar(matrixUserId, homeserverUrl);
     const messages = await Promise.all(
       room
         .getLiveTimeline()
         .getEvents()
         .slice(-limit)
-        .map((event) => processMessage(event, client, olmMachine))
+        .map((event) => processMessage(event, client, cryptoSidecar))
     );
 
     const validMessages = messages.filter((message) => message !== null);
@@ -90,9 +93,11 @@ export const getMessagesByDateHandler = async (
       };
     }
 
+    await ensureHistoryBefore(client, room, new Date(startDate).getTime());
+
     const events = room.getLiveTimeline().getEvents();
-    const olmMachine = getCachedCryptoSidecar(matrixUserId, homeserverUrl)?.olmMachine ?? null;
-    const messages = await processMessagesByDate(events, startDate, endDate, client, olmMachine);
+    const cryptoSidecar = getCachedCryptoSidecar(matrixUserId, homeserverUrl);
+    const messages = await processMessagesByDate(events, startDate, endDate, client, cryptoSidecar);
 
     return {
       content:
