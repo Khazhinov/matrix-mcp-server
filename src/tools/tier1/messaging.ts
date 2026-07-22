@@ -1,7 +1,10 @@
 import { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { makeHtmlMessage, makeEmoteMessage, makeTextMessage } from "matrix-js-sdk/lib/content-helpers.js";
 import { createConfiguredMatrixClient, getAccessToken, getMatrixContext } from "../../utils/server-helpers.js";
 import { removeClientFromCache } from "../../matrix/client.js";
+import { getCachedCryptoSidecar } from "../../matrix/clientCache.js";
+import { sendMatrixMessage } from "../../matrix/crypto/index.js";
 import { ToolRegistrationFunction } from "../../types/tool-types.js";
 
 // Tool: Send message
@@ -50,40 +53,39 @@ export const sendMessageHandler = async (
       };
     }
 
-    let response;
+    const olmMachine = getCachedCryptoSidecar(matrixUserId, homeserverUrl)?.olmMachine ?? null;
+
+    let content: Record<string, any>;
     if (messageType === "html") {
-      response = await client.sendHtmlMessage(roomId, message, message);
+      content = makeHtmlMessage(message, message);
     } else if (messageType === "emote") {
-      response = await client.sendEmoteMessage(roomId, message);
-    } else {
-      // Default to text message
-      if (replyToEventId) {
-        const replyToEvent = room.findEventById(replyToEventId);
-        if (replyToEvent) {
-          response = await client.sendMessage(roomId, {
-            msgtype: "m.text" as any,
-            body: message,
-            "m.relates_to": {
-              "m.in_reply_to": {
-                event_id: replyToEventId,
-              },
+      content = makeEmoteMessage(message);
+    } else if (replyToEventId) {
+      const replyToEvent = room.findEventById(replyToEventId);
+      if (!replyToEvent) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error: Reply event ${replyToEventId} not found in room`,
             },
-          });
-        } else {
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Error: Reply event ${replyToEventId} not found in room`,
-              },
-            ],
-            isError: true,
-          };
-        }
-      } else {
-        response = await client.sendTextMessage(roomId, message);
+          ],
+          isError: true,
+        };
       }
+      content = {
+        ...makeTextMessage(message),
+        "m.relates_to": {
+          "m.in_reply_to": {
+            event_id: replyToEventId,
+          },
+        },
+      };
+    } else {
+      content = makeTextMessage(message);
     }
+
+    const response = await sendMatrixMessage(client, olmMachine, roomId, content);
 
     return {
       content: [
@@ -138,7 +140,7 @@ export const sendDirectMessageHandler = async (
       // Use existing DM room
       roomId = dmRoom.roomId;
     } else {
-      // Create new DM room
+      // Create new DM room (always encrypted, per Element convention for DMs)
       const createResponse = await client.createRoom({
         is_direct: true,
         invite: [targetUserId],
@@ -150,10 +152,22 @@ export const sendDirectMessageHandler = async (
               guest_access: "forbidden",
             },
           },
+          {
+            type: "m.room.encryption",
+            content: {
+              algorithm: "m.megolm.v1.aes-sha2",
+            },
+          },
         ],
       });
       roomId = createResponse.room_id;
-      
+
+      // Wait for the room (and its m.room.encryption state event) to sync
+      // locally before checking hasEncryptionStateEvent() - otherwise the
+      // very first message could race ahead of local room state and go out
+      // in plaintext (same sync-delay issue as room-management.ts).
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+
       // Mark as DM in account data
       try {
         const existingDmData: any = await client.getAccountData("m.direct" as any);
@@ -169,7 +183,8 @@ export const sendDirectMessageHandler = async (
     }
 
     // Send the message
-    const response = await client.sendTextMessage(roomId, message);
+    const olmMachine = getCachedCryptoSidecar(matrixUserId, homeserverUrl)?.olmMachine ?? null;
+    const response = await sendMatrixMessage(client, olmMachine, roomId, makeTextMessage(message));
     
     // Get room info for response
     const finalRoom = client.getRoom(roomId) || dmRoom;

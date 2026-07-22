@@ -6,12 +6,13 @@ import { ToolRegistrationFunction } from "../../types/tool-types.js";
 
 // Tool: Create room
 export const createRoomHandler = async (
-  { roomName, isPrivate, topic, inviteUsers, roomAlias }: { 
-    roomName: string; 
-    isPrivate: boolean; 
-    topic?: string; 
-    inviteUsers?: string[]; 
-    roomAlias?: string 
+  { roomName, isPrivate, topic, inviteUsers, roomAlias, encrypted }: {
+    roomName: string;
+    isPrivate: boolean;
+    topic?: string;
+    inviteUsers?: string[];
+    roomAlias?: string;
+    encrypted: boolean;
   },
   { requestInfo, authInfo }: any
 ) => {
@@ -46,9 +47,10 @@ export const createRoomHandler = async (
       createOptions.preset = "public_chat" as any;
     }
 
-    // Additional security settings for private rooms
+    // Additional security settings for private rooms, plus optional encryption
+    const initialState: any[] = [];
     if (isPrivate) {
-      createOptions.initial_state = [
+      initialState.push(
         {
           type: "m.room.guest_access",
           content: {
@@ -60,8 +62,19 @@ export const createRoomHandler = async (
           content: {
             history_visibility: "invited",
           },
+        }
+      );
+    }
+    if (encrypted) {
+      initialState.push({
+        type: "m.room.encryption",
+        content: {
+          algorithm: "m.megolm.v1.aes-sha2",
         },
-      ];
+      });
+    }
+    if (initialState.length > 0) {
+      createOptions.initial_state = initialState;
     }
 
     // Create the room
@@ -83,6 +96,7 @@ export const createRoomHandler = async (
 Room ID: ${roomId}
 Alias: ${finalAlias}
 Privacy: ${isPrivate ? "Private" : "Public"}
+Encrypted: ${encrypted ? "Yes" : "No"}
 Topic: ${topic || "No topic set"}
 Members: ${memberCount}
 Invited users: ${inviteUsers && inviteUsers.length > 0 ? inviteUsers.join(", ") : "None"}`,
@@ -405,6 +419,10 @@ export const registerRoomManagementTools: ToolRegistrationFunction = (server) =>
           .string()
           .optional()
           .describe("Optional room alias (e.g., 'my-room' for #my-room:domain.com)"),
+        encrypted: z
+          .boolean()
+          .default(false)
+          .describe("Whether to enable end-to-end encryption (m.megolm.v1.aes-sha2) for this room"),
       },
     },
     createRoomHandler
