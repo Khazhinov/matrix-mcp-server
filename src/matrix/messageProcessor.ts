@@ -12,15 +12,23 @@ export type ProcessedMessage =
   | { type: "text"; text: string; undecryptable?: boolean }
   | { type: "image"; data: string; mimeType: string };
 
+/** `[2026-07-22T08:39:12.345Z] @user:domain: ` - prefixed onto text messages so sender/time survive the flat MCP content-block shape without adding non-standard fields to it. */
+function formatSenderPrefix(sender: string | null | undefined, timestampMs: number | undefined): string {
+  const timestamp = timestampMs ? new Date(timestampMs).toISOString() : "unknown time";
+  return `[${timestamp}] ${sender ?? "unknown sender"}: `;
+}
+
 /** Format an already-decrypted (or always-plaintext) m.room.message content into a ProcessedMessage. */
 async function formatRoomMessageContent(
   content: Record<string, any>,
-  matrixClient: MatrixClient
+  matrixClient: MatrixClient,
+  sender?: string | null,
+  timestampMs?: number
 ): Promise<ProcessedMessage | null> {
   if (content.msgtype === "m.text") {
     return {
       type: "text",
-      text: String(content.body || ""),
+      text: `${formatSenderPrefix(sender, timestampMs)}${String(content.body || "")}`,
     };
   } else if (content.msgtype === "m.image" && content.url) {
     try {
@@ -65,10 +73,11 @@ export async function processMessage(
   }
 
   if (event.getType() === "m.room.encrypted") {
+    const senderPrefix = formatSenderPrefix(event.getSender(), event.getTs());
     if (!olmMachine) {
       return {
         type: "text",
-        text: "[Unable to decrypt message: no E2EE session available for this account]",
+        text: `${senderPrefix}[Unable to decrypt message: no E2EE session available for this account]`,
         undecryptable: true,
       };
     }
@@ -83,19 +92,19 @@ export async function processMessage(
     if (!result.ok) {
       return {
         type: "text",
-        text: `[Unable to decrypt message: ${result.reason}]`,
+        text: `${senderPrefix}[Unable to decrypt message: ${result.reason}]`,
         undecryptable: true,
       };
     }
     if (result.type !== EventType.RoomMessage) {
       return null;
     }
-    return formatRoomMessageContent(result.content, matrixClient);
+    return formatRoomMessageContent(result.content, matrixClient, event.getSender(), event.getTs());
   }
 
   const content = event.getContent();
   if (event.getType() === EventType.RoomMessage && content) {
-    return formatRoomMessageContent(content, matrixClient);
+    return formatRoomMessageContent(content, matrixClient, event.getSender(), event.getTs());
   }
 
   return null;
